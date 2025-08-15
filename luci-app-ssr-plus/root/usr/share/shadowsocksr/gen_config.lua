@@ -4,11 +4,11 @@ local ucursor = require "luci.model.uci".cursor()
 local json = require "luci.jsonc"
 
 local server_section = arg[1]
-local proto = arg[2] or "tcp"
-local local_port = arg[3] or "0"
-local socks_port = arg[4] or "0"
+local proto          = arg[2] or "tcp"
+local local_port     = arg[3] or "0"
+local socks_port     = arg[4] or "0"
 
-local chain = arg[5] or "0"
+local chain          = arg[5] or "0"
 local chain_local_port = string.split(chain, "/")[2] or "0"
 
 local server = ucursor:get_all("shadowsocksr", server_section)
@@ -16,6 +16,9 @@ local socks_server = ucursor:get_all("shadowsocksr", "@socks5_proxy[0]") or {}
 local xray_fragment = ucursor:get_all("shadowsocksr", "@global_xray_fragment[0]") or {}
 local xray_noise = ucursor:get_all("shadowsocksr", "@xray_noise_packets[0]") or {}
 local outbound_settings = nil
+
+local node_id = server_section
+local remarks = server.alias or ""
 
 function vmess_vless()
 	outbound_settings = {
@@ -217,6 +220,8 @@ end
 						usage = "verify",
 						certificateFile = server.certpath
 					} or nil,
+					echConfigList = (server.enable_ech == "1") and server.ech_config or nil,
+					echForceQuery = (server.enable_ech == "1") and (server.ech_ForceQuery or "none") or nil
 				} or nil,
 				xtlsSettings = (server.xtls == '1') and server.tls_host and {
 					-- xtls
@@ -230,12 +235,13 @@ end
 					shortId = server.reality_shortid,
 					spiderX = server.reality_spiderx,
 					fingerprint = server.fingerprint,
+					mldsa65Verify = (server.enable_mldsa65verify == '1') and server.reality_mldsa65verify or nil,
 					serverName = server.tls_host
 				} or nil,
 				rawSettings = (server.transport == "raw" or server.transport == "tcp") and {
 					-- tcp
 					header = {
-						type = server.tcp_guise or "none",
+						type = server.tcp_guise,
 						request = (server.tcp_guise == "http") and {
 							-- request
 							path = {server.http_path} or {"/"},
@@ -314,7 +320,8 @@ end
 					tcpMptcp = (server.mptcp == "1") and true or nil, -- MPTCP
 					Penetrate = (server.mptcp == "1") and true or nil, -- Penetrate MPTCP
 					tcpcongestion = server.custom_tcpcongestion, -- 连接服务器节点的 TCP 拥塞控制算法
-					dialerProxy = (xray_fragment.fragment == "1" or xray_fragment.noise == "1") and "dialerproxy" or nil
+					dialerProxy = (xray_fragment.fragment == "1" or xray_fragment.noise == "1") and
+					              ((remarks ~= nil and remarks ~= "") and (node_id .. "." .. remarks) or node_id) or nil
 				}
 			} or nil,
 			mux = (server.v2ray_protocol ~= "wireguard") and {
@@ -331,19 +338,21 @@ end
 if xray_fragment.fragment ~= "0" or (xray_fragment.noise ~= "0" and xray_noise.enabled ~= "0") then
 	table.insert(Xray.outbounds, {
 		protocol = "freedom",
-		tag = "dialerproxy",
+		tag = (remarks ~= nil and remarks ~= "") and (node_id .. "." .. remarks) or node_id,
 		settings = {
 			domainStrategy = (xray_fragment.noise == "1" and xray_noise.enabled == "1") and xray_noise.domainStrategy,
 			fragment = (xray_fragment.fragment == "1") and {
 				packets = (xray_fragment.fragment_packets ~= "") and xray_fragment.fragment_packets or nil,
 				length = (xray_fragment.fragment_length ~= "") and xray_fragment.fragment_length or nil,
-				interval = (xray_fragment.fragment_interval ~= "") and xray_fragment.fragment_interval or nil
+				interval = (xray_fragment.fragment_interval ~= "") and xray_fragment.fragment_interval or nil,
+				maxSplit = (xray_fragment.fragment_maxsplit ~= "") and xray_fragment.fragment_maxsplit or nil
 			} or nil,
 			noises = (xray_fragment.noise == "1" and xray_noise.enabled == "1") and {
 				{
 					type = xray_noise.type,
 					packet = xray_noise.packet,
-					delay = xray_noise.delay:find("-") and xray_noise.delay or tonumber(xray_noise.delay)
+					delay = xray_noise.delay:find("-") and xray_noise.delay or tonumber(xray_noise.delay),
+					applyTo = xray_noise.applyto
 				}
 			} or nil
 		},
@@ -412,14 +421,29 @@ local ss = {
 	reuse_port = true
 }
 local hysteria2 = {
-	server = (server.server_port and (server.port_range and (server.server .. ":" .. server.server_port .. "," .. string.gsub(server.port_range, ":", "-")) or (server.server .. ":" .. server.server_port) or (server.port_range and server.server .. ":" .. string.gsub(server.port_range, ":", "-") or server.server .. ":443"))),
+	server = (
+		server.server_port and 
+		(
+			server.port_range and 
+			(server.server .. ":" .. server.server_port .. "," .. string.gsub(server.port_range, ":", "-")) 
+			or 
+			(server.server .. ":" .. server.server_port)
+		) 
+		or 
+		(
+			server.port_range and 
+			server.server .. ":" .. string.gsub(server.port_range, ":", "-") 
+			or 
+			server.server .. ":443"
+		)
+	),
 	bandwidth = (server.uplink_capacity or server.downlink_capacity) and {
-	up = tonumber(server.uplink_capacity) and tonumber(server.uplink_capacity) .. " mbps" or nil,
-	down = tonumber(server.downlink_capacity) and tonumber(server.downlink_capacity) .. " mbps" or nil 
+		up = tonumber(server.uplink_capacity) and tonumber(server.uplink_capacity) .. " mbps" or nil,
+		down = tonumber(server.downlink_capacity) and tonumber(server.downlink_capacity) .. " mbps" or nil 
 	} or nil,
 	socks5 = (proto:find("tcp") and tonumber(socks_port) and tonumber(socks_port) ~= 0) and {
 		listen = "0.0.0.0:" .. tonumber(socks_port),
-		disable_udp = false
+		disableUDP = false
 	} or nil,
 	transport = server.transport_protocol and {
 		type = server.transport_protocol or "udp",
@@ -452,7 +476,7 @@ local hysteria2 = {
 		disablePathMTUDiscovery = (server.disablepathmtudiscovery == "1") and true or false
 	} or nil,
 	auth = server.hy2_auth,
-	tls = (server.tls_host) and {
+	tls = server.tls_host and {
 		sni = server.tls_host,
 		--alpn = server.tls_alpn or nil,
 		insecure = (server.insecure == "1") and true or false,
@@ -495,7 +519,7 @@ local chain_sslocal = {
 	} or {{ 
 			protocol = "socks",
 			local_address = "0.0.0.0",
-			ocal_port = tonumber(socks_port)
+			local_port = tonumber(socks_port)
 			}},
 		servers = {
 			{
